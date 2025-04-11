@@ -47,6 +47,15 @@ WordCount *word_counts = NULL;
 int num_words(FILE* infile) {
   int num_words = 0;
 
+  for (int ch = fgetc(infile); ch != EOF; ch = fgetc(infile)) {
+    if (isalpha(ch)) {
+      num_words++;
+      while (ch != EOF && isalpha(ch)) {
+        ch = fgetc(infile);
+      }
+    }
+  }
+
   return num_words;
 }
 
@@ -140,6 +149,7 @@ int main (int argc, char *argv[]) {
   }
 
   if (count_mode) {
+    total_words = num_words(infile);
     printf("The total number of words is: %i\n", total_words);
   } else {
     wordcount_sort(&word_counts, wordcount_less);
