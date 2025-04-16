@@ -40,10 +40,7 @@ int init_words(WordCount **wclist) {
      Returns 0 if no errors are encountered
      in the body of this function; 1 otherwise.
   */
-  *wclist = malloc(sizeof(WordCount *));
-  if (wclist == NULL) {
-    return 1;
-  }
+  *wclist = NULL;
 
   return 0;
 }
@@ -95,8 +92,9 @@ int add_word(WordCount **wclist, char *word) {
   }
 
   (*curr)->word = newWord;
+  (*curr)->count = 1;
 
- return 0;
+  return 0;
 }
 
 void fprint_words(WordCount *wchead, FILE *ofile) {
