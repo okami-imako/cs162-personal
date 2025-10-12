@@ -24,19 +24,32 @@
 
 #include <stddef.h>
 #include <stdio.h>
-#include <string.h>
-#include <ctype.h>
-#include <stdlib.h>
 #include <pthread.h>
+#include <threads.h>
 
 #include "word_count.h"
 #include "word_helpers.h"
+
+typedef struct {
+  word_count_list_t* wclist;
+  char* filename;
+} t_args;
+
+void* handle(void* arguments) {
+  t_args* args = arguments;
+
+  FILE* infile = fopen(args->filename, "r");
+  // fprintf(stdout, "reading file %s\n", args->filename);
+  count_words(args->wclist, infile);
+  fclose(infile);
+
+  pthread_exit(NULL);
+}
 
 /*
  * main - handle command line, spawning one thread per file.
  */
 int main(int argc, char* argv[]) {
-  /* Create the empty data structure. */
   word_count_list_t word_counts;
   init_words(&word_counts);
 
@@ -44,7 +57,19 @@ int main(int argc, char* argv[]) {
     /* Process stdin in a single thread. */
     count_words(&word_counts, stdin);
   } else {
-    /* TODO */
+    pthread_t threads[argc-1];
+    t_args args_arr[argc-1];
+
+    for (int i = 1; i < argc; i++) {
+      t_args args = {&word_counts, argv[i]};
+      args_arr[i-1] = args;
+      pthread_create(&threads[i-1], NULL, handle, (void*)&args_arr[i-1]);
+    }
+
+    for (int i = 1; i < argc; i++) {
+      pthread_join(threads[i-1], NULL);
+    }
+
   }
 
   /* Output final result of all threads' work. */
