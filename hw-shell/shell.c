@@ -1,5 +1,3 @@
-#include <ctype.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -9,13 +7,15 @@
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
+#include <dirent.h>
 
 #include "tokenizer.h"
 
 /* Convenience macro to silence compiler warnings about unused function parameters. */
 #define unused __attribute__((unused))
 #define PATH "PATH"
-#define SEPARATOR ";"
+
+char* separator = ":";
 
 /* Whether the shell is connected to an actual terminal or not. */
 bool shell_is_interactive;
@@ -84,7 +84,7 @@ int lookup(char cmd[]) {
   return -1;
 }
 
-char* extract_filename(const char* path) {
+char* extract_file_name(const char* path) {
   int i = 0;
   int last_delim_ind = 0;
   while (path[i] != '\0') {
@@ -97,27 +97,67 @@ char* extract_filename(const char* path) {
   return filename;
 }
 
+char* join_path(char *first, char *second) {
+  size_t size_first = strlen(first);
+  size_t size_second = strlen(second);
+
+  char* result = malloc((size_first + size_second + 2) * sizeof(char));
+
+  strcpy(result, first);
+  result[size_first] = '/';
+  strcpy(result + size_first + 1, second);
+
+  return result;
+}
+
+char* find_file_in_dir(char *dir_name, char *file_name) {
+  DIR *dir = opendir(dir_name);
+  if (dir == NULL) {
+    printf("error opening dir %s\n", dir_name);
+    return NULL;
+  }
+
+  for (struct dirent *dir_ent = readdir(dir); dir_ent != NULL; dir_ent = readdir(dir)) {
+    printf("found %s\n", dir_ent->d_name);
+    if (strcmp(dir_ent->d_name, file_name) == 0) {
+      closedir(dir);
+      return join_path(dir_name, file_name);
+    }
+  }
+
+  closedir(dir);
+  return NULL;
+}
+
 void run(struct tokens* tokens) {
   size_t tokens_len = tokens_get_length(tokens);
   if (tokens_len == 0) {
     return;
   }
 
-  char *path, *filename;
-  char* filenameOrPath = tokens_get_token(tokens, 0);
-  if (filenameOrPath[0] == '/') {
-    path = filenameOrPath;
-    filename = extract_filename(path);
+  char *full_file_path, *file_name;
+  char* first_token = tokens_get_token(tokens, 0);
+  if (first_token[0] == '/') {
+    full_file_path = first_token;
+    file_name = extract_file_name(full_file_path);
   } else {
-    char* pathEnvVar = getenv(PATH);
+    file_name = first_token;
+
+    char* env_path = strdup(getenv(PATH));
+    if (env_path == NULL) {
+      return;
+    }
+
     char* saveptr;
-    for (char* token = strtok_r(pathEnvVar, SEPARATOR, &saveptr); token != NULL; token = strtok_r(pathEnvVar, SEPARATOR, &saveptr)) {
-      
+    for (char* dir_name = strtok_r(env_path, separator, &saveptr);
+         dir_name != NULL && full_file_path == NULL;
+         dir_name = strtok_r(NULL, separator, &saveptr)) {
+      full_file_path = find_file_in_dir(dir_name, file_name);
     }
   }
 
   char* args[tokens_len+1]; 
-  args[0] = filename;
+  args[0] = file_name;
   for (size_t i = 1; i < tokens_len; i++) {
     args[i] = tokens_get_token(tokens, i);
   }
@@ -132,11 +172,9 @@ void run(struct tokens* tokens) {
     int status;
     waitpid(pid, &status, 0);
   } else {
-    execv(path, args);
-    printf("failed to exec %s", path);
+    execv(full_file_path, args);
+    printf("failed to exec %s\n", full_file_path);
   }
-
-  free(filename);
 }
 
 /* Intialization procedures for this shell */
