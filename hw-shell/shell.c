@@ -10,12 +10,10 @@
 #include <dirent.h>
 
 #include "tokenizer.h"
+#include "helper.h"
 
 /* Convenience macro to silence compiler warnings about unused function parameters. */
 #define unused __attribute__((unused))
-#define PATH "PATH"
-
-char* separator = ":";
 
 /* Whether the shell is connected to an actual terminal or not. */
 bool shell_is_interactive;
@@ -84,79 +82,19 @@ int lookup(char cmd[]) {
   return -1;
 }
 
-char* extract_file_name(const char* path) {
-  int i = 0;
-  int last_delim_ind = 0;
-  while (path[i] != '\0') {
-    if (path[i] == '/') last_delim_ind = i;
-    i++;
-  }
-
-  char* filename = (char*) malloc(sizeof(char) * (i - last_delim_ind));
-  strcpy(filename, path+last_delim_ind+1);
-  return filename;
-}
-
-char* join_path(char *first, char *second) {
-  size_t size_first = strlen(first);
-  size_t size_second = strlen(second);
-
-  char* result = malloc((size_first + size_second + 2) * sizeof(char));
-
-  strcpy(result, first);
-  result[size_first] = '/';
-  strcpy(result + size_first + 1, second);
-
-  return result;
-}
-
-char* find_file_in_dir(char *dir_name, char *file_name) {
-  DIR *dir = opendir(dir_name);
-  if (dir == NULL) {
-    return NULL;
-  }
-
-  char* full_path = NULL;
-  for (struct dirent *dir_ent = readdir(dir); dir_ent != NULL; dir_ent = readdir(dir)) {
-    if (strcmp(dir_ent->d_name, file_name) == 0) {
-      full_path = join_path(dir_name, file_name);
-      break;
+int resolve_process(char* token, char** full_path, char** file_name) {
+  if (token[0] == '/') {
+    *full_path = token;
+    *file_name = extract_file_name(*full_path);
+  } else {
+    *file_name = token;
+    *full_path = find_file_in_path(*file_name);
+    if (!*full_path) {
+      printf("cannot resolve %s\n", *file_name);
+      return 0;
     }
   }
-
-  closedir(dir);
-  return full_path;
-}
-
-char* find_file_in_path(char* file_name) {
-  char* env_path = strdup(getenv(PATH));
-  if (env_path == NULL) {
-    return NULL;
-  }
-
-  char* full_path = NULL;
-  char* saveptr;
-  for (char* dir_name = strtok_r(env_path, separator, &saveptr);
-       dir_name != NULL && full_path == NULL;
-       dir_name = strtok_r(NULL, separator, &saveptr)) {
-    full_path = find_file_in_dir(dir_name, file_name);
-  }
-  return full_path;
-}
-
-void fork_and_exec(char* full_path, char* args[]) {
-  pid_t pid = fork();
-
-  if (pid == -1) {
-    printf("failed to fork\n");
-    return;
-  } else if (pid != 0) {
-    int status;
-    waitpid(pid, &status, 0);
-  } else {
-    execv(full_path, args);
-    printf("failed to exec %s\n", full_path);
-  }
+  return 1;
 }
 
 void run(struct tokens* tokens) {
@@ -165,30 +103,39 @@ void run(struct tokens* tokens) {
     return;
   }
 
+  char* first_token = tokens_get_token(tokens, 0);
   char* full_path = NULL;
   char* file_name = NULL;
+  if (!resolve_process(first_token, &full_path, &file_name)) {
+    return;
+  }
 
-  char* first_token = tokens_get_token(tokens, 0);
-  if (first_token[0] == '/') {
-    full_path = first_token;
-    file_name = extract_file_name(full_path);
-  } else {
-    file_name = first_token;
-    full_path = find_file_in_path(file_name);
-    if (!full_path) {
-      printf("cannot resolve %s\n", file_name);
-      return;
+  char* args_buff[tokens_len];
+  int ind;
+  for (ind = 0; ind < tokens_len-1; ind++) {
+    char* token = tokens_get_token(tokens, ind+1);
+    if (is_keyword(token)) {
+      break;
     }
+    args_buff[ind] = token;
   }
 
-  char* args[tokens_len+1]; 
+  char** args = parse_args(args_buff, ind);
   args[0] = file_name;
-  for (size_t i = 1; i < tokens_len; i++) {
-    args[i] = tokens_get_token(tokens, i);
-  }
-  args[tokens_len] = NULL;
 
-  fork_and_exec(full_path, args);
+  char* exec_conf_buff[tokens_len];
+  for (int i = 0; i < tokens_len; i++) {
+    exec_conf_buff[i] = NULL;
+  }
+
+  for (int i = 0; ind < tokens_len-1; ind++, i++) {
+    char* token = tokens_get_token(tokens, ind+1);
+    exec_conf_buff[i] = token;
+  }
+
+  exec_conf_t* exec_conf = parse_exec_conf(exec_conf_buff);
+
+  fork_and_exec(full_path, args, exec_conf);
 }
 
 /* Intialization procedures for this shell */
