@@ -113,20 +113,50 @@ char* join_path(char *first, char *second) {
 char* find_file_in_dir(char *dir_name, char *file_name) {
   DIR *dir = opendir(dir_name);
   if (dir == NULL) {
-    printf("error opening dir %s\n", dir_name);
     return NULL;
   }
 
+  char* full_path = NULL;
   for (struct dirent *dir_ent = readdir(dir); dir_ent != NULL; dir_ent = readdir(dir)) {
-    printf("found %s\n", dir_ent->d_name);
     if (strcmp(dir_ent->d_name, file_name) == 0) {
-      closedir(dir);
-      return join_path(dir_name, file_name);
+      full_path = join_path(dir_name, file_name);
+      break;
     }
   }
 
   closedir(dir);
-  return NULL;
+  return full_path;
+}
+
+char* find_file_in_path(char* file_name) {
+  char* env_path = strdup(getenv(PATH));
+  if (env_path == NULL) {
+    return NULL;
+  }
+
+  char* full_path = NULL;
+  char* saveptr;
+  for (char* dir_name = strtok_r(env_path, separator, &saveptr);
+       dir_name != NULL && full_path == NULL;
+       dir_name = strtok_r(NULL, separator, &saveptr)) {
+    full_path = find_file_in_dir(dir_name, file_name);
+  }
+  return full_path;
+}
+
+void fork_and_exec(char* full_path, char* args[]) {
+  pid_t pid = fork();
+
+  if (pid == -1) {
+    printf("failed to fork\n");
+    return;
+  } else if (pid != 0) {
+    int status;
+    waitpid(pid, &status, 0);
+  } else {
+    execv(full_path, args);
+    printf("failed to exec %s\n", full_path);
+  }
 }
 
 void run(struct tokens* tokens) {
@@ -135,24 +165,19 @@ void run(struct tokens* tokens) {
     return;
   }
 
-  char *full_file_path, *file_name;
+  char* full_path = NULL;
+  char* file_name = NULL;
+
   char* first_token = tokens_get_token(tokens, 0);
   if (first_token[0] == '/') {
-    full_file_path = first_token;
-    file_name = extract_file_name(full_file_path);
+    full_path = first_token;
+    file_name = extract_file_name(full_path);
   } else {
     file_name = first_token;
-
-    char* env_path = strdup(getenv(PATH));
-    if (env_path == NULL) {
+    full_path = find_file_in_path(file_name);
+    if (!full_path) {
+      printf("cannot resolve %s\n", file_name);
       return;
-    }
-
-    char* saveptr;
-    for (char* dir_name = strtok_r(env_path, separator, &saveptr);
-         dir_name != NULL && full_file_path == NULL;
-         dir_name = strtok_r(NULL, separator, &saveptr)) {
-      full_file_path = find_file_in_dir(dir_name, file_name);
     }
   }
 
@@ -163,18 +188,7 @@ void run(struct tokens* tokens) {
   }
   args[tokens_len] = NULL;
 
-  pid_t pid = fork();
-
-  if (pid == -1) {
-    printf("failed to fork");
-    return;
-  } else if (pid != 0) {
-    int status;
-    waitpid(pid, &status, 0);
-  } else {
-    execv(full_file_path, args);
-    printf("failed to exec %s\n", full_file_path);
-  }
+  fork_and_exec(full_path, args);
 }
 
 /* Intialization procedures for this shell */
