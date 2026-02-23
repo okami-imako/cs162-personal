@@ -1,4 +1,3 @@
-#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,60 +81,15 @@ int lookup(char cmd[]) {
   return -1;
 }
 
-int resolve_process(char* token, char** full_path, char** file_name) {
-  if (token[0] == '/') {
-    *full_path = token;
-    *file_name = extract_file_name(*full_path);
-  } else {
-    *file_name = token;
-    *full_path = find_file_in_path(*file_name);
-    if (!*full_path) {
-      printf("cannot resolve %s\n", *file_name);
-      return 0;
-    }
-  }
-  return 1;
-}
-
 void run(struct tokens* tokens) {
   size_t tokens_len = tokens_get_length(tokens);
   if (tokens_len == 0) {
     return;
   }
 
-  char* first_token = tokens_get_token(tokens, 0);
-  char* full_path = NULL;
-  char* file_name = NULL;
-  if (!resolve_process(first_token, &full_path, &file_name)) {
-    return;
-  }
+  exec_conf_t* exec_conf = parse_exec_conf(tokens);
 
-  char* args_buff[tokens_len];
-  int ind;
-  for (ind = 0; ind < tokens_len-1; ind++) {
-    char* token = tokens_get_token(tokens, ind+1);
-    if (is_keyword(token)) {
-      break;
-    }
-    args_buff[ind] = token;
-  }
-
-  char** args = parse_args(args_buff, ind);
-  args[0] = file_name;
-
-  char* exec_conf_buff[tokens_len];
-  for (int i = 0; i < tokens_len; i++) {
-    exec_conf_buff[i] = NULL;
-  }
-
-  for (int i = 0; ind < tokens_len-1; ind++, i++) {
-    char* token = tokens_get_token(tokens, ind+1);
-    exec_conf_buff[i] = token;
-  }
-
-  exec_conf_t* exec_conf = parse_exec_conf(exec_conf_buff);
-
-  fork_and_exec(full_path, args, exec_conf);
+  fork_and_exec(exec_conf);
 }
 
 /* Intialization procedures for this shell */

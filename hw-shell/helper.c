@@ -8,13 +8,18 @@
 #include <unistd.h>
 
 #include "helper.h"
+#include "util.h"
 
-#define PATH "PATH"
-
-const char* const separator = ":";
 const char* const keywords = "<>";
 
+bool is_keyword(char* token) {
+  return strlen(token) == 1 && strchr(keywords, token[0]) != NULL;
+}
+
 struct exec_conf {
+  char* full_path;
+  char* file_name;
+  char** args;
   int stdin_fd;
   int stdout_fd;
 };
@@ -26,164 +31,76 @@ exec_conf_t* init_exec_conf() {
   return exec_conf;
 }
 
-typedef char** parser_t(char**, exec_conf_t*);
+void free_conf(exec_conf_t* conf) {
+  if (conf->full_path) {
+    free(conf->full_path);
+  }
+  if (conf->file_name) {
+    free(conf->file_name);
+  }
+  free(conf);
+}
 
-char** parser_in(char** tokens, exec_conf_t* conf);
-char** parser_out(char** tokens, exec_conf_t* conf);
+typedef size_t parser_t(size_t, struct tokens*, exec_conf_t*);
+
+size_t parse_executable(size_t, struct tokens*, exec_conf_t*);
+size_t parse_args(size_t, struct tokens*, exec_conf_t*);
+size_t parse_in(size_t, struct tokens*, exec_conf_t*);
+size_t parse_out(size_t, struct tokens*, exec_conf_t*);
 
 typedef struct parser_desc {
-  char ch;
+  char* keyword;
   parser_t* fun;
 } parser_desc_t;
 
 parser_desc_t parsers[] = {
-  {'<', parser_in},
-  {'>', parser_out},
+  {"<", parse_in},
+  {">", parse_out},
 };
 
-parser_t* get_parser(char ch) {
+parser_t* get_parser(char* token) {
   for (int i = 0; i < sizeof(parsers) / sizeof(parser_desc_t); i++) {
-    if (parsers[i].ch == ch) {
+    if (strcmp(parsers[i].keyword, token) == 0) {
       return parsers[i].fun;
     }
   }
   return NULL;
 }
 
-char** parser_in(char** tokens, exec_conf_t* exec_conf) {
-  if (tokens[1] == NULL) {
-    printf("expected filename after '<'\n");
-    return NULL;
-  }
-  int fd = open(tokens[1], O_RDONLY);
-  if (fd == -1) {
-    printf("error opening %s\n", tokens[1]);
-    perror("open");
-    return NULL;
-  }
-  exec_conf->stdin_fd = fd;
-  return &tokens[2];
-}
-
-char** parser_out(char** tokens, exec_conf_t* exec_conf) {
-  if (tokens[1] == NULL) {
-    printf("expected filename after '>'\n");
-    return NULL;
-  }
-  int fd = open(tokens[1], O_WRONLY);
-  if (fd == -1) {
-    printf("error opening %s\n", tokens[1]);
-    perror("open");
-    return NULL;
-  }
-  exec_conf->stdout_fd = fd;
-  return &tokens[2];
-}
-
-char* extract_file_name(char* path) {
-  int i = 0;
-  int last_delim_ind = 0;
-  while (path[i] != '\0') {
-    if (path[i] == '/') last_delim_ind = i;
-    i++;
-  }
-
-  char* filename = (char*) malloc(sizeof(char) * (i - last_delim_ind));
-  strcpy(filename, path+last_delim_ind+1);
-  return filename;
-}
-
-char* join_path(char* first, char* second) {
-  size_t size_first = strlen(first);
-  size_t size_second = strlen(second);
-
-  char* result = malloc((size_first + size_second + 2) * sizeof(char));
-
-  strcpy(result, first);
-  result[size_first] = '/';
-  strcpy(result + size_first + 1, second);
-
-  return result;
-}
-
-char* find_file_in_dir(char* dir_name, char* file_name) {
-  DIR *dir = opendir(dir_name);
-  if (dir == NULL) {
-    return NULL;
-  }
-
-  char* full_path = NULL;
-  for (struct dirent *dir_ent = readdir(dir); dir_ent != NULL; dir_ent = readdir(dir)) {
-    if (strcmp(dir_ent->d_name, file_name) == 0) {
-      full_path = join_path(dir_name, file_name);
-      break;
-    }
-  }
-
-  closedir(dir);
-  return full_path;
-}
-
-char* find_file_in_path(char* file_name) {
-  char* env_path = strdup(getenv(PATH));
-  if (env_path == NULL) {
-    return NULL;
-  }
-
-  char* full_path = NULL;
-  char* saveptr;
-  for (char* dir_name = strtok_r(env_path, separator, &saveptr);
-       dir_name != NULL && full_path == NULL;
-       dir_name = strtok_r(NULL, separator, &saveptr)) {
-    full_path = find_file_in_dir(dir_name, file_name);
-  }
-  return full_path;
-}
-
-char** parse_args(char** args_buff, size_t buff_len) {
-  char** args = malloc(sizeof(char*)*(buff_len+2));
-  args[buff_len+1] = NULL;
-
-  for (int i = 1; i < buff_len+1; i++) {
-    args[i] = args_buff[i-1];
-  }
-
-  return args;
-}
-
-bool is_keyword(char* token) {
-  return strlen(token) == 1 && strchr(keywords, token[0]) != NULL;
-}
-
-exec_conf_t* parse_exec_conf(char** exec_conf_buff) {
+exec_conf_t* parse_exec_conf(struct tokens* tokens) {
   exec_conf_t* exec_conf = init_exec_conf();
 
-  char** ptr = exec_conf_buff;
-  while (*ptr != NULL) {
-    if (!is_keyword(*ptr)) {
-      printf("don't know what '%s' means\n", *ptr);
-      free(exec_conf);
+  size_t ind = 0;
+  while (ind < tokens_get_length(tokens)) {
+    ind = parse_executable(ind, tokens, exec_conf);
+    if (ind == -1) {
+      free_conf(exec_conf);
       return NULL;
     }
 
-    parser_t* parser = get_parser(**ptr);
-    if (parser == NULL) {
-      printf("unsupported character %c\n", **ptr);
-      free(exec_conf);
-      return NULL;
-    }
+    ind = parse_args(ind, tokens, exec_conf);
 
-    ptr = parser(ptr, exec_conf);
-    if (ptr == NULL) {
-      free(exec_conf);
-      return NULL;
+    while (ind < tokens_get_length(tokens)) {
+      char* keyword = tokens_get_token(tokens, ind);
+      parser_t* parser = get_parser(keyword);
+      if (parser == NULL) {
+        printf("unsupported keyword %s\n", keyword);
+        free_conf(exec_conf);
+        return NULL;
+      }
+
+      ind = parser(ind, tokens, exec_conf);
+      if (ind == -1) {
+        free_conf(exec_conf);
+        return NULL;
+      }
     }
   }
 
   return exec_conf;
 }
 
-void fork_and_exec(char* full_path, char* args[], exec_conf_t* exec_conf) {
+void fork_and_exec(exec_conf_t* conf) {
   pid_t pid = fork();
 
   if (pid == -1) {
@@ -193,16 +110,87 @@ void fork_and_exec(char* full_path, char* args[], exec_conf_t* exec_conf) {
     int status;
     waitpid(pid, &status, 0);
   } else {
-    if (exec_conf->stdin_fd != -1) {
-      dup2(exec_conf->stdin_fd, STDIN_FILENO);
-      close(exec_conf->stdin_fd);
+    if (conf->stdin_fd != -1) {
+      dup2(conf->stdin_fd, STDIN_FILENO);
+      close(conf->stdin_fd);
     }
-    if (exec_conf->stdout_fd != -1) {
-      dup2(exec_conf->stdout_fd, STDOUT_FILENO);
-      close(exec_conf->stdout_fd);
+    if (conf->stdout_fd != -1) {
+      dup2(conf->stdout_fd, STDOUT_FILENO);
+      close(conf->stdout_fd);
     }
-    execv(full_path, args);
-    printf("failed to exec %s\n", full_path);
+    execv(conf->full_path, conf->args);
+    printf("failed to exec %s\n", conf->full_path);
   }
+}
+
+size_t parse_executable(size_t ind, struct tokens* tokens, exec_conf_t* conf) {
+  char* token = tokens_get_token(tokens, ind);
+  if (token[0] == '/') {
+    conf->full_path = copy_str(token, strlen(token));
+    conf->file_name = extract_file_name(token);
+  } else {
+    conf->full_path = locate_file(token);
+    if (!conf->full_path) {
+      printf("cannot resolve %s\n", token);
+      return -1;
+    }
+    conf->file_name = copy_str(token, strlen(token));
+  }
+  return ind+1;
+}
+
+size_t parse_args(size_t ind, struct tokens* tokens, exec_conf_t* conf) {
+  size_t args_len = 0;
+  char** args_buff = calloc(tokens_get_length(tokens)-ind, sizeof(char*));
+
+  for (; ind < tokens_get_length(tokens); ind++) {
+    char* token = tokens_get_token(tokens, ind);
+    if (is_keyword(token)) {
+      break;
+    }
+    args_buff[args_len++] = token;
+  }
+
+  conf->args = calloc(args_len+2, sizeof(char*));
+  conf->args[0] = conf->file_name;
+  conf->args[args_len+1] = NULL;
+  for (int i = 0; i < args_len; i++) {
+    conf->args[i+1] = args_buff[i];
+  }
+
+  free(args_buff);
+  return ind;
+}
+
+size_t parse_in(size_t ind, struct tokens* tokens, exec_conf_t* exec_conf) {
+  if (ind == tokens_get_length(tokens)-1) {
+    printf("expected filename after '<'\n");
+    return -1;
+  }
+  char* file_name = tokens_get_token(tokens, ind+1);
+  int fd = open(file_name, O_RDONLY);
+  if (fd == -1) {
+    printf("error opening %s\n", file_name);
+    perror("open");
+    return -1;
+  }
+  exec_conf->stdin_fd = fd;
+  return ind+2;
+}
+
+size_t parse_out(size_t ind, struct tokens* tokens, exec_conf_t* exec_conf) {
+  if (ind == tokens_get_length(tokens)-1) {
+    printf("expected filename after '>'\n");
+    return -1;
+  }
+  char* file_name = tokens_get_token(tokens, ind+1);
+  int fd = open(file_name, O_WRONLY);
+  if (fd == -1) {
+    printf("error opening %s\n", file_name);
+    perror("open");
+    return -1;
+  }
+  exec_conf->stdout_fd = fd;
+  return ind+2;
 }
 
