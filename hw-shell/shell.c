@@ -87,7 +87,10 @@ void run(struct tokens* tokens) {
     return;
   }
 
-  exec_conf_t* exec_conf = parse_exec_conf(tokens);
+  exec_conf_t* exec_conf = build_exec_graph(tokens);
+  if (exec_conf == NULL) {
+    return;
+  }
 
   fork_and_exec(exec_conf);
 }
